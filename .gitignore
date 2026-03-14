@@ -1,16 +1,8 @@
-# Dependencies
-/node_modules
-/dist
-/build
-
-# Logs
-*.log
-npm-debug.log*
-
-# Environment Variables
+node_modules/
+coverage/
 .env
 .env.local
 .env.*.local
-
-# Operating System Files
+dist/
 .DS_Store
+npm-debug.log*
