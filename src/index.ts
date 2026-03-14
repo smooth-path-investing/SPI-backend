@@ -1,18 +1,80 @@
 import { createServer } from "node:http";
+import { URL } from "node:url";
 
-const port = Number(process.env.PORT) || 3000;
+import { env } from "./config/env";
+import {
+  getAllStockTickers,
+  getStockAssetChartSeriesByTicker
+} from "./services/stockAssets";
 
-const server = createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "application/json" });
+const server = createServer(async (req, res) => {
+  const requestUrl = new URL(req.url || "/", `http://${req.headers.host}`);
+
+  if (req.method === "GET" && requestUrl.pathname === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok" }));
+    return;
+  }
+
+  if (req.method === "GET" && requestUrl.pathname === "/stock-assets/tickers") {
+    try {
+      const tickers = await getAllStockTickers();
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ tickers, count: tickers.length }));
+      return;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown server error.";
+
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message }));
+      return;
+    }
+  }
+
+  const stockAssetChartMatch = requestUrl.pathname.match(
+    /^\/stock-assets\/([^/]+)\/pricechart$/
+  );
+
+  if (req.method === "GET" && stockAssetChartMatch) {
+    try {
+      const ticker = decodeURIComponent(stockAssetChartMatch[1]).trim();
+      const chartSeries = await getStockAssetChartSeriesByTicker(ticker);
+
+      if (!chartSeries) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            message: `No chart data was found for ticker ${ticker.toUpperCase()}.`
+          })
+        );
+        return;
+      }
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(chartSeries));
+      return;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown server error.";
+
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message }));
+      return;
+    }
+  }
+
+  res.writeHead(404, { "Content-Type": "application/json" });
   res.end(
     JSON.stringify({
-      message: "Fresh TypeScript Node.js project is ready.",
+      message: "Route not found.",
       method: req.method,
-      url: req.url
+      url: requestUrl.pathname
     })
   );
 });
 
-server.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
+server.listen(env.port, () => {
+  console.log(`Server running at http://localhost:${env.port}`);
 });
