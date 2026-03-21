@@ -16,14 +16,15 @@ export type StockAssetRow = {
 export type StockAssetChartPoint = {
   date: string;
   close: number;
-  benchmark_close: number;
 };
 
 export type StockAssetChartSeries = {
   ticker: string;
+  benchmark_ticker: "IVV";
   interval: "quarterly";
   as_of: string;
-  points: StockAssetChartPoint[];
+  ticker_points: StockAssetChartPoint[];
+  ivv_points: StockAssetChartPoint[];
 };
 
 const PAGE_SIZE = 1000;
@@ -105,33 +106,53 @@ export async function getStockAssetChartSeriesByTicker(
   const normalizedTicker = ticker.trim().toUpperCase();
   const rows = await getStockAssetDataByTicker(normalizedTicker);
 
-  const points = rows
+  const tickerPoints = rows
     .filter(
       (
         row
       ): row is StockAssetRow & {
         date: string;
         stock_price: number;
+      } =>
+        row.date !== null &&
+        row.stock_price !== null
+    )
+    .map((row) => ({
+      date: row.date,
+      close: row.stock_price
+    }));
+
+  const ivvPoints = rows
+    .filter(
+      (
+        row
+      ): row is StockAssetRow & {
+        date: string;
         ivv_price: number;
       } =>
         row.date !== null &&
-        row.stock_price !== null &&
         row.ivv_price !== null
     )
     .map((row) => ({
       date: row.date,
-      close: row.stock_price,
-      benchmark_close: row.ivv_price
+      close: row.ivv_price
     }));
 
-  if (points.length === 0) {
+  if (tickerPoints.length === 0) {
     return null;
   }
 
+  const asOfCandidates = [
+    tickerPoints[tickerPoints.length - 1]?.date,
+    ivvPoints[ivvPoints.length - 1]?.date
+  ].filter((date): date is string => Boolean(date));
+
   return {
     ticker: normalizedTicker,
+    benchmark_ticker: "IVV",
     interval: "quarterly",
-    as_of: points[points.length - 1].date,
-    points
+    as_of: asOfCandidates.sort().at(-1) ?? tickerPoints[tickerPoints.length - 1].date,
+    ticker_points: tickerPoints,
+    ivv_points: ivvPoints
   };
 }

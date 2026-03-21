@@ -62,14 +62,14 @@ Example response:
 }
 ```
 
-### `GET /stock-assets/:ticker/pricechart`
+### `GET /stock-assets/:ticker`
 
-Returns chart-ready quarterly price data for one ticker.
+Returns chart-ready quarterly price data for one ticker plus `IVV`, using one endpoint response.
 
 Example:
 
 ```text
-GET /stock-assets/AAPL/pricechart
+GET /stock-assets/AAPL
 ```
 
 Example response:
@@ -77,13 +77,19 @@ Example response:
 ```json
 {
   "ticker": "AAPL",
+  "benchmark_ticker": "IVV",
   "interval": "quarterly",
   "as_of": "2025-09-30",
-  "points": [
+  "ticker_points": [
     {
       "date": "2009-06-30",
-      "close": 4.272,
-      "benchmark_close": 68.307
+      "close": 4.272
+    }
+  ],
+  "ivv_points": [
+    {
+      "date": "2009-06-30",
+      "close": 68.307
     }
   ]
 }

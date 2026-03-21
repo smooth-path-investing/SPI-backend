@@ -33,20 +33,20 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  const stockAssetChartMatch = requestUrl.pathname.match(
-    /^\/stock-assets\/([^/]+)\/pricechart$/
+  const stockAssetSeriesMatch = requestUrl.pathname.match(
+    /^\/stock-assets\/([^/]+)$/
   );
 
-  if (req.method === "GET" && stockAssetChartMatch) {
+  if (req.method === "GET" && stockAssetSeriesMatch) {
     try {
-      const ticker = decodeURIComponent(stockAssetChartMatch[1]).trim();
+      const ticker = decodeURIComponent(stockAssetSeriesMatch[1]).trim();
       const chartSeries = await getStockAssetChartSeriesByTicker(ticker);
 
       if (!chartSeries) {
         res.writeHead(404, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
-            message: `No chart data was found for ticker ${ticker.toUpperCase()}.`
+            message: `No price data was found for ticker ${ticker.toUpperCase()}.`
           })
         );
         return;
