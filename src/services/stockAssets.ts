@@ -66,7 +66,9 @@ export async function getAllStockTickers(): Promise<string[]> {
   return Array.from(uniqueTickers);
 }
 
-async function getStockAssetDataByTicker(ticker: string): Promise<StockAssetRow[]> {
+export async function getStockAssetDataByTicker(
+  ticker: string
+): Promise<StockAssetRow[]> {
   const normalizedTicker = ticker.trim().toUpperCase();
   let start = 0;
   const rows: StockAssetRow[] = [];
