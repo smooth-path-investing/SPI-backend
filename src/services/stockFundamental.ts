@@ -1,4 +1,7 @@
+import { env } from "../config/env";
+import { TtlCache } from "../lib/cache";
 import { supabase } from "../lib/supabase";
+import { fetchAllPages, normalizeNullableText, normalizeTicker } from "./shared";
 
 type StockFundamentalRow = {
   variable: string | null;
@@ -23,22 +26,30 @@ export type StockFundamentalRebasedResponse = {
   series: StockFundamentalSeries[];
 };
 
-const PAGE_SIZE = 1000;
 const STOCK_FUNDAMENTAL_TABLE = "stock_fundamental";
 const REBASED_VARIABLES = ["marketcap", "ps1", "pb"] as const;
+type RebasedVariable = (typeof REBASED_VARIABLES)[number];
+const VARIABLE_ORDER = new Map(
+  REBASED_VARIABLES.map((variable, index) => [variable, index] as const)
+);
+const rebasedSeriesCache = new TtlCache<StockFundamentalRebasedResponse | null>(
+  env.cacheTtlMs
+);
 
 function roundToFourDecimals(value: number): number {
   return Number(value.toFixed(4));
 }
 
+function isRebasedVariable(value: string): value is RebasedVariable {
+  return REBASED_VARIABLES.includes(value as RebasedVariable);
+}
+
 async function getStockFundamentalRowsByTicker(
   ticker: string
 ): Promise<StockFundamentalRow[]> {
-  const normalizedTicker = ticker.trim().toUpperCase();
-  const rows: StockFundamentalRow[] = [];
-  let start = 0;
+  const normalizedTicker = normalizeTicker(ticker);
 
-  while (true) {
+  return fetchAllPages<StockFundamentalRow>(async (from, to) => {
     const { data, error } = await supabase
       .from(STOCK_FUNDAMENTAL_TABLE)
       .select("variable, date, value")
@@ -46,7 +57,7 @@ async function getStockFundamentalRowsByTicker(
       .in("variable", Array.from(REBASED_VARIABLES))
       .order("variable", { ascending: true })
       .order("date", { ascending: true })
-      .range(start, start + PAGE_SIZE - 1)
+      .range(from, to)
       .returns<StockFundamentalRow[]>();
 
     if (error) {
@@ -55,91 +66,93 @@ async function getStockFundamentalRowsByTicker(
       );
     }
 
-    const pageRows = data ?? [];
-    rows.push(...pageRows);
-
-    if (pageRows.length < PAGE_SIZE) {
-      break;
-    }
-
-    start += PAGE_SIZE;
-  }
-
-  return rows;
+    return data ?? [];
+  });
 }
 
 export async function getStockFundamentalRebasedSeriesByTicker(
   ticker: string
 ): Promise<StockFundamentalRebasedResponse | null> {
-  const normalizedTicker = ticker.trim().toUpperCase();
-  const rows = await getStockFundamentalRowsByTicker(normalizedTicker);
+  const normalizedTicker = normalizeTicker(ticker);
 
-  if (rows.length === 0) {
-    return null;
-  }
+  return rebasedSeriesCache.getOrLoad(normalizedTicker, async () => {
+    const rows = await getStockFundamentalRowsByTicker(normalizedTicker);
 
-  const variableRowsMap = new Map<string, StockFundamentalRow[]>();
-
-  for (const row of rows) {
-    const variable = row.variable?.trim();
-
-    if (!variable) {
-      continue;
+    if (rows.length === 0) {
+      return null;
     }
 
-    const variableRows = variableRowsMap.get(variable) ?? [];
-    variableRows.push(row);
-    variableRowsMap.set(variable, variableRows);
-  }
+    const variableRowsMap = new Map<RebasedVariable, StockFundamentalRow[]>();
 
-  const series = Array.from(variableRowsMap.entries())
-    .sort(([leftVariable], [rightVariable]) =>
-      leftVariable.localeCompare(rightVariable)
-    )
-    .flatMap(([variable, variableRows]) => {
-      const orderedRows = variableRows
-        .filter(
-          (
-            row
-          ): row is StockFundamentalRow & {
-            date: string;
-            value: number;
-          } =>
-            row.date !== null &&
-            row.value !== null &&
-            !Number.isNaN(row.value)
-        )
-        .sort((leftRow, rightRow) => leftRow.date.localeCompare(rightRow.date));
+    for (const row of rows) {
+      const variable = normalizeNullableText(row.variable)?.toLowerCase();
 
-      if (orderedRows.length === 0) {
-        return [];
+      if (!variable || !isRebasedVariable(variable)) {
+        continue;
       }
 
-      const baseValue = orderedRows[0].value;
+      const variableRows = variableRowsMap.get(variable) ?? [];
+      variableRows.push(row);
+      variableRowsMap.set(variable, variableRows);
+    }
 
-      if (baseValue === 0) {
-        return [];
-      }
+    const series = Array.from(variableRowsMap.entries())
+      .sort(
+        ([leftVariable], [rightVariable]) =>
+          (VARIABLE_ORDER.get(leftVariable) ?? Number.MAX_SAFE_INTEGER) -
+          (VARIABLE_ORDER.get(rightVariable) ?? Number.MAX_SAFE_INTEGER)
+      )
+      .flatMap(([variable, variableRows]) => {
+        const orderedRows = variableRows
+          .filter(
+            (
+              row
+            ): row is StockFundamentalRow & {
+              date: string;
+              value: number;
+            } =>
+              row.date !== null &&
+              row.value !== null &&
+              !Number.isNaN(row.value)
+          )
+          .sort((leftRow, rightRow) => leftRow.date.localeCompare(rightRow.date));
 
-      return [
-        {
-          variable,
-          series: orderedRows.map((row) => ({
-            date: row.date,
-            value: roundToFourDecimals((row.value / baseValue) * 100)
-          }))
+        if (orderedRows.length === 0) {
+          return [];
         }
-      ];
-    });
 
-  if (series.length === 0) {
-    return null;
-  }
+        const firstRow = orderedRows[0];
 
-  return {
-    ticker: normalizedTicker,
-    count: series.length,
-    rebasing_basis: "first_value_per_variable_base_100",
-    series
-  };
+        if (!firstRow) {
+          return [];
+        }
+
+        const baseValue = firstRow.value;
+
+        if (baseValue === 0) {
+          return [];
+        }
+
+        return [
+          {
+            variable,
+            series: orderedRows.map((row) => ({
+              date: row.date,
+              value: roundToFourDecimals((row.value / baseValue) * 100)
+            }))
+          }
+        ];
+      });
+
+    if (series.length === 0) {
+      return null;
+    }
+
+    return {
+      ticker: normalizedTicker,
+      count: series.length,
+      rebasing_basis: "first_value_per_variable_base_100",
+      series
+    };
+  });
 }

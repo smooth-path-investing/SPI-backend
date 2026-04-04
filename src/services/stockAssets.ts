@@ -1,4 +1,7 @@
+import { env } from "../config/env";
+import { TtlCache } from "../lib/cache";
 import { supabase } from "../lib/supabase";
+import { fetchAllPages, normalizeNullableText, normalizeTicker, uniqueSorted } from "./shared";
 
 type StockAssetTickerRow = {
   ticker: string | null;
@@ -27,60 +30,50 @@ export type StockAssetChartSeries = {
   ivv_points: StockAssetChartPoint[];
 };
 
-const PAGE_SIZE = 1000;
+const STOCK_ASSETS_TABLE = "stock_assets";
+const tickerCache = new TtlCache<string[]>(env.cacheTtlMs);
+const chartSeriesCache = new TtlCache<StockAssetChartSeries | null>(env.cacheTtlMs);
 
 export async function getAllStockTickers(): Promise<string[]> {
-  const uniqueTickers = new Set<string>();
-  let start = 0;
+  return tickerCache.getOrLoad("all", async () => {
+    const rows = await fetchAllPages<StockAssetTickerRow>(async (from, to) => {
+      const { data, error } = await supabase
+        .from(STOCK_ASSETS_TABLE)
+        .select("ticker")
+        .range(from, to)
+        .returns<StockAssetTickerRow[]>();
 
-  while (true) {
-    const { data, error } = await supabase
-      .from("stock_assets")
-      .select("ticker")
-      .range(start, start + PAGE_SIZE - 1)
-      .returns<StockAssetTickerRow[]>();
-
-    if (error) {
-      throw new Error(
-        `Failed to read tickers from stock_assets: ${error.message}`
-      );
-    }
-
-    const rows = data ?? [];
-
-    for (const row of rows) {
-      const ticker = row.ticker?.trim();
-
-      if (ticker) {
-        uniqueTickers.add(ticker);
+      if (error) {
+        throw new Error(
+          `Failed to read tickers from ${STOCK_ASSETS_TABLE}: ${error.message}`
+        );
       }
-    }
 
-    if (rows.length < PAGE_SIZE) {
-      break;
-    }
+      return data ?? [];
+    });
 
-    start += PAGE_SIZE;
-  }
-
-  return Array.from(uniqueTickers);
+    return uniqueSorted(
+      rows.flatMap((row) => {
+        const ticker = normalizeNullableText(row.ticker)?.toUpperCase();
+        return ticker ? [ticker] : [];
+      })
+    );
+  });
 }
 
-export async function getStockAssetDataByTicker(
+async function getStockAssetDataByTicker(
   ticker: string
 ): Promise<StockAssetRow[]> {
-  const normalizedTicker = ticker.trim().toUpperCase();
-  let start = 0;
-  const rows: StockAssetRow[] = [];
+  const normalizedTicker = normalizeTicker(ticker);
 
-  while (true) {
+  return fetchAllPages<StockAssetRow>(async (from, to) => {
     const { data, error } = await supabase
-      .from("stock_assets")
-      .select("*")
+      .from(STOCK_ASSETS_TABLE)
+      .select("ticker, quarter_end, date, ivv_price, stock_price")
       .eq("ticker", normalizedTicker)
       .order("date", { ascending: true })
       .order("quarter_end", { ascending: true })
-      .range(start, start + PAGE_SIZE - 1)
+      .range(from, to)
       .returns<StockAssetRow[]>();
 
     if (error) {
@@ -89,72 +82,68 @@ export async function getStockAssetDataByTicker(
       );
     }
 
-    const pageRows = data ?? [];
-    rows.push(...pageRows);
-
-    if (pageRows.length < PAGE_SIZE) {
-      break;
-    }
-
-    start += PAGE_SIZE;
-  }
-
-  return rows;
+    return data ?? [];
+  });
 }
 
 export async function getStockAssetChartSeriesByTicker(
   ticker: string
 ): Promise<StockAssetChartSeries | null> {
-  const normalizedTicker = ticker.trim().toUpperCase();
-  const rows = await getStockAssetDataByTicker(normalizedTicker);
+  const normalizedTicker = normalizeTicker(ticker);
 
-  const tickerPoints = rows
-    .filter(
-      (
-        row
-      ): row is StockAssetRow & {
-        date: string;
-        stock_price: number;
-      } =>
-        row.date !== null &&
-        row.stock_price !== null
-    )
-    .map((row) => ({
-      date: row.date,
-      close: row.stock_price
-    }));
+  return chartSeriesCache.getOrLoad(normalizedTicker, async () => {
+    const rows = await getStockAssetDataByTicker(normalizedTicker);
 
-  const ivvPoints = rows
-    .filter(
-      (
-        row
-      ): row is StockAssetRow & {
-        date: string;
-        ivv_price: number;
-      } =>
-        row.date !== null &&
-        row.ivv_price !== null
-    )
-    .map((row) => ({
-      date: row.date,
-      close: row.ivv_price
-    }));
+    const tickerPoints = rows
+      .filter(
+        (
+          row
+        ): row is StockAssetRow & {
+          date: string;
+          stock_price: number;
+        } => row.date !== null && row.stock_price !== null
+      )
+      .map((row) => ({
+        date: row.date,
+        close: row.stock_price
+      }));
 
-  if (tickerPoints.length === 0) {
-    return null;
-  }
+    const ivvPoints = rows
+      .filter(
+        (
+          row
+        ): row is StockAssetRow & {
+          date: string;
+          ivv_price: number;
+        } => row.date !== null && row.ivv_price !== null
+      )
+      .map((row) => ({
+        date: row.date,
+        close: row.ivv_price
+      }));
 
-  const asOfCandidates = [
-    tickerPoints[tickerPoints.length - 1]?.date,
-    ivvPoints[ivvPoints.length - 1]?.date
-  ].filter((date): date is string => Boolean(date));
+    if (tickerPoints.length === 0) {
+      return null;
+    }
 
-  return {
-    ticker: normalizedTicker,
-    benchmark_ticker: "IVV",
-    interval: "quarterly",
-    as_of: asOfCandidates.sort().at(-1) ?? tickerPoints[tickerPoints.length - 1].date,
-    ticker_points: tickerPoints,
-    ivv_points: ivvPoints
-  };
+    const latestTickerPoint = tickerPoints.at(-1);
+
+    if (!latestTickerPoint) {
+      return null;
+    }
+
+    const asOfCandidates = [
+      tickerPoints[tickerPoints.length - 1]?.date,
+      ivvPoints[ivvPoints.length - 1]?.date
+    ].filter((date): date is string => Boolean(date));
+
+    return {
+      ticker: normalizedTicker,
+      benchmark_ticker: "IVV",
+      interval: "quarterly",
+      as_of: asOfCandidates.sort().at(-1) ?? latestTickerPoint.date,
+      ticker_points: tickerPoints,
+      ivv_points: ivvPoints
+    };
+  });
 }

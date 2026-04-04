@@ -1,4 +1,7 @@
+import { env } from "../config/env";
+import { TtlCache } from "../lib/cache";
 import { supabase } from "../lib/supabase";
+import { fetchAllPages, normalizeNullableText, uniqueSorted } from "./shared";
 
 type StockEtfVariableRow = {
   variable: string | null;
@@ -12,46 +15,34 @@ export type StockEtfRow = {
   value: number | null;
 };
 
-const PAGE_SIZE = 1000;
 const STOCK_ETF_TABLE = "stock_etf";
+const factorCache = new TtlCache<string[]>(env.cacheTtlMs);
 
 export async function getAllStockEtfFactors(): Promise<string[]> {
-  const uniqueFactors = new Set<string>();
-  let start = 0;
+  return factorCache.getOrLoad("all", async () => {
+    const rows = await fetchAllPages<StockEtfVariableRow>(async (from, to) => {
+      const { data, error } = await supabase
+        .from(STOCK_ETF_TABLE)
+        .select("variable")
+        .range(from, to)
+        .returns<StockEtfVariableRow[]>();
 
-  while (true) {
-    const { data, error } = await supabase
-      .from(STOCK_ETF_TABLE)
-      .select("variable")
-      .range(start, start + PAGE_SIZE - 1)
-      .returns<StockEtfVariableRow[]>();
-
-    if (error) {
-      throw new Error(
-        `Failed to read factors from ${STOCK_ETF_TABLE}: ${error.message}`
-      );
-    }
-
-    const rows = data ?? [];
-
-    for (const row of rows) {
-      const factor = row.variable?.trim();
-
-      if (factor) {
-        uniqueFactors.add(factor);
+      if (error) {
+        throw new Error(
+          `Failed to read factors from ${STOCK_ETF_TABLE}: ${error.message}`
+        );
       }
-    }
 
-    if (rows.length < PAGE_SIZE) {
-      break;
-    }
+      return data ?? [];
+    });
 
-    start += PAGE_SIZE;
-  }
-
-  return Array.from(uniqueFactors).sort((left, right) =>
-    left.localeCompare(right)
-  );
+    return uniqueSorted(
+      rows.flatMap((row) => {
+        const factor = normalizeNullableText(row.variable);
+        return factor ? [factor] : [];
+      })
+    );
+  });
 }
 
 export async function getStockEtfRowsByVariables(
@@ -60,7 +51,7 @@ export async function getStockEtfRowsByVariables(
   const normalizedVariables = Array.from(
     new Set(
       variables
-        .map((variable) => variable.trim().toUpperCase())
+        .map((variable) => variable.trim())
         .filter((variable) => variable.length > 0)
     )
   );
@@ -69,17 +60,14 @@ export async function getStockEtfRowsByVariables(
     return [];
   }
 
-  const rows: StockEtfRow[] = [];
-  let start = 0;
-
-  while (true) {
+  return fetchAllPages<StockEtfRow>(async (from, to) => {
     const { data, error } = await supabase
       .from(STOCK_ETF_TABLE)
-      .select("*")
+      .select("id, quarter_end, date, variable, value")
       .in("variable", normalizedVariables)
       .order("variable", { ascending: true })
       .order("date", { ascending: true })
-      .range(start, start + PAGE_SIZE - 1)
+      .range(from, to)
       .returns<StockEtfRow[]>();
 
     if (error) {
@@ -88,15 +76,6 @@ export async function getStockEtfRowsByVariables(
       );
     }
 
-    const pageRows = data ?? [];
-    rows.push(...pageRows);
-
-    if (pageRows.length < PAGE_SIZE) {
-      break;
-    }
-
-    start += PAGE_SIZE;
-  }
-
-  return rows;
+    return data ?? [];
+  });
 }

@@ -1,17 +1,26 @@
 {
   "name": "spi-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "dist/index.js",
+  "description": "Smooth Path Investing backend API",
+  "main": "dist/bootstrap.js",
   "scripts": {
-    "build": "tsc",
-    "dev": "node --env-file=.env -r ts-node/register src/index.ts",
-    "start": "node --env-file=.env dist/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc -p tsconfig.json",
+    "check": "npm run typecheck && npm run build",
+    "dev": "node --watch -r ts-node/register src/bootstrap.ts development",
+    "docker:dev": "docker compose --profile dev up --build api-dev",
+    "docker:prod": "docker compose --profile prod up --build api-prod",
+    "start": "node dist/bootstrap.js production",
+    "start:development": "node dist/bootstrap.js development",
+    "start:production": "node dist/bootstrap.js production",
+    "test": "npm run typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1"
   },
