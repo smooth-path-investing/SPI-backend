@@ -2,7 +2,13 @@ node_modules/
 coverage/
 .env
 .env.local
+.env.development
+.env.production
+.env.test
 .env.*.local
+!.env.example
+!.env.development.example
+!.env.production.example
 dist/
 .DS_Store
 npm-debug.log*
