@@ -30,7 +30,7 @@ ENV NODE_ENV=production
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY --from=build /app/dist ./dist
-COPY --chown=node:node read.md ./read.md
+COPY --chown=node:node README.md ./README.md
 USER node
 EXPOSE 3000
 CMD ["npm", "run", "start"]
