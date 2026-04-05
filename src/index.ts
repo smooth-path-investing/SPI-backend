@@ -83,7 +83,7 @@ const routes: Route[] = [
       if (!rebasedSeries) {
         throw new HttpError(
           404,
-          `No stock fundamental data was found for ticker ${ticker}.`
+          `No rebased indicator data was found for ticker ${ticker}.`
         );
       }
 

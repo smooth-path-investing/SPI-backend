@@ -8,6 +8,10 @@ type StockFactorCoefvecRow = {
   coefficients: unknown;
 };
 
+type StockFactorNameRow = {
+  factor_name: string | null;
+};
+
 export type StockFactorBarValue = {
   factor_name: string;
   normalized_value: number;
@@ -22,6 +26,7 @@ export type StockFactorBarGraphResponse = {
 
 const STOCK_FACTOR_COEFVEC_TABLE = "stock_factor_coefvec";
 const barGraphCache = new TtlCache<StockFactorBarGraphResponse | null>(env.cacheTtlMs);
+const factorNameCache = new TtlCache<string[]>(env.cacheTtlMs);
 
 function parseNumericValue(value: unknown): number | null {
   if (typeof value === "number") {
@@ -103,6 +108,45 @@ async function getStockFactorCoefvecRowsByTicker(
     }
 
     return data ?? [];
+  });
+}
+
+export async function getStockFactorNamesByTicker(
+  ticker: string
+): Promise<string[]> {
+  const normalizedTicker = normalizeTicker(ticker);
+
+  return factorNameCache.getOrLoad(normalizedTicker, async () => {
+    const rows = await fetchAllPages<StockFactorNameRow>(async (from, to) => {
+      const { data, error } = await supabase
+        .from(STOCK_FACTOR_COEFVEC_TABLE)
+        .select("factor_name")
+        .eq("stock_symbol", normalizedTicker)
+        .range(from, to)
+        .returns<StockFactorNameRow[]>();
+
+      if (error) {
+        throw new Error(
+          `Failed to read factor names for ${normalizedTicker}: ${error.message}`
+        );
+      }
+
+      return data ?? [];
+    });
+
+    const factorNames = new Set<string>();
+
+    for (const row of rows) {
+      const factorName = normalizeNullableText(row.factor_name);
+
+      if (factorName) {
+        factorNames.add(factorName);
+      }
+    }
+
+    return Array.from(factorNames).sort((left, right) =>
+      left.localeCompare(right)
+    );
   });
 }
 
