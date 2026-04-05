@@ -363,21 +363,27 @@ Example response:
 
 Purpose:
 
-- returns rebased stock fundamental series for selected variables
-
-Current rebased variables:
-
-- `marketcap`
-- `ps1`
-- `pb`
+- returns rebased indicator series for the factors tied to the requested ticker
 
 What the backend does:
 
-- reads raw rows from `stock_fundamental`
-- groups rows by variable
-- sorts each variable series by date
+- reads factor names for the ticker from `stock_factor_coefvec`
+- routes each factor to the correct source table
+- uses `stock_macro` when the factor starts with `USA`
+- uses `stock_fundamental` when the factor name is lowercase
+- uses `stock_etf` for other capitalized factor names
+- uses the factor name without the leading `USA` as the lookup key for `stock_macro`
+- fetches all matching time series in batches
+- groups rows by factor name
+- sorts each factor series by date
 - rebases the first valid value to `100`
 - rounds output values to four decimals
+
+Notes:
+
+- the route name is legacy naming, but the implementation now spans `stock_factor_coefvec`, `stock_macro`, `stock_fundamental`, and `stock_etf`
+- the response shape stays the same, and each `series[].variable` value is now a factor name resolved from `stock_factor_coefvec`
+- the response includes every factor returned by `stock_factor_coefvec`; if a factor has no matching source rows, its `series` array is empty
 
 Example:
 
@@ -394,7 +400,7 @@ Example response:
   "rebasing_basis": "first_value_per_variable_base_100",
   "series": [
     {
-      "variable": "marketcap",
+      "variable": "USALUNR",
       "series": [
         {
           "date": "2021-03-31",
@@ -403,6 +409,24 @@ Example response:
         {
           "date": "2021-06-30",
           "value": 110.4321
+        }
+      ]
+    },
+    {
+      "variable": "pb",
+      "series": [
+        {
+          "date": "2021-03-31",
+          "value": 100
+        }
+      ]
+    },
+    {
+      "variable": "MTUM",
+      "series": [
+        {
+          "date": "2021-03-31",
+          "value": 100
         }
       ]
     }
